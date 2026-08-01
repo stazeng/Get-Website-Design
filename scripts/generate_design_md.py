@@ -108,30 +108,31 @@ def build_messages(collected: dict, screenshots: list[Path], language: str) -> l
         user_intro = (
             f"网站：{hostname}\n"
             f"页面标题：{title}\n\n"
-            f"下面是 DOM 文本与页面结构快照。请结合后续截图分析网站风格，但不要分析 CSS 原始数据。\n"
-            f"其中 distinctiveCandidates 是从真实 DOM 中挑出的特殊模块候选，请重点参考它们来生成“特殊元素 Few-shot 复刻样例”：\n"
+            f"下面是 DOM 文本与页面结构快照。请结合后续截图分析网站风格，重点是配色、字体、圆角、间距、阴影、质感、动效等设计细节，不要分析 CSS 原始数据。\n"
+            f"其中 distinctiveCandidates 是从真实 DOM 中挑出的模块候选，仅用于帮助你确认页面上真实存在的元素，不要为不存在的元素编造描述：\n"
             f"{json.dumps({'meta': meta, 'domSnapshot': dom_snapshot}, ensure_ascii=False, indent=2)}"
         )
         trailing = (
             "请只输出风格分析 markdown，不要包含 frontmatter、固定文本、CSS Evidence 或下载说明。"
-            "必须包含“特殊元素 Few-shot 复刻样例”章节，并为 3-6 个真实页面元素写出用途、"
-            "识别依据、视觉规则、复刻提示词和结构草图。"
+            "全文不要输出任何 HTML/CSS 代码块或结构草图；“标志性元素”最多 2 个且必须有真实证据，"
+            "仅用纯文字描述视觉规则。"
         )
     else:
         system_prompt = read_text(ASSETS / "system_prompt_en.txt")
         user_intro = (
             f"Website: {hostname}\n"
             f"Page title: {title}\n\n"
-            f"Here is a DOM text and structure snapshot. Analyze the site style with the screenshots below, but do not analyze raw CSS.\n"
-            f'The distinctiveCandidates field contains real DOM-derived module candidates. Use it heavily when writing "Distinctive Element Few-shot Examples":\n'
+            f"Here is a DOM text and structure snapshot. Analyze the site style with the screenshots below, "
+            f"focusing on design details (color, typography, radius, spacing, shadow, texture, motion). Do not analyze raw CSS.\n"
+            f"The distinctiveCandidates field contains real DOM-derived module candidates. Use it only to confirm "
+            f"which elements actually exist on the page; never invent elements that are not there:\n"
             f"{json.dumps({'meta': meta, 'domSnapshot': dom_snapshot}, ensure_ascii=False, indent=2)}"
         )
         trailing = (
             "Output only the style analysis markdown. Do not include frontmatter, "
-            "fixed copy, CSS Evidence, or download instructions. You must include "
-            '"Distinctive Element Few-shot Examples" with 3-6 real page elements, '
-            "each containing purpose, evidence, visual rules, recreation prompt, "
-            "and structure sketch."
+            "fixed copy, CSS Evidence, or download instructions. Never output "
+            "HTML/CSS code blocks or structure sketches. Include at most 2 "
+            'evidence-grounded "Signature Elements", described in prose only.'
         )
 
     user_content: list = [{"type": "text", "text": user_intro}]

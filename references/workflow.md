@@ -1,146 +1,40 @@
-# 完整工作流（DESIGN.md 生成流程详解）
+# 完整工作流
 
-本流程移植自 design-extractor Chrome 扩展的 sidepanel + background + content-script 三方协作逻辑，
-在 Claude Code 环境中由 chrome-devtools MCP + 本 skill 的 Python 脚本协作完成。
-
-## 总览
-
-```
-chrome-devtools MCP                 本地脚本 (skill)
-─────────────────────               ─────────────────────────
-new_page(url)                       │
-take_screenshot(top)         ─┐     │
-scroll → 35%, screenshot     ─┼──►  ai_screenshots[3]
-scroll → 70%, screenshot     ─┘     │
-evaluate_script(collect_design_data.js) ──► collected.json
-                                    │   ├─ meta
-                                    │   ├─ domSnapshot
-                                    │   └─ engineeredCssEvidence
-                                    │
-                                    ▼
-                             generate_design_md.py
-                              ├─ normalize_css_evidence(...)
-                              ├─ format_css_evidence_markdown(...)
-                              ├─ build_messages(dom + measured tokens + 3 screenshots)
-                              ├─ call_llm(vision model)
-                              └─ assemble: frontmatter + FIXED_1
-                                          + 八节正文 + FIXED_2
-                                          + Token evidence + Evidence Appendix
-                                    │
-                                    ▼
-                output/<hostname>/design.md
-                output/<hostname>/shot{1,2,3}.jpg
+```text
+URL → 浏览器执行 collect_design_data.js → collected.json
+    → 支持图片且能够读取时，额外截图并查看（最多 3 张）
+    → Python --prepare → analysis-input.md
+    → 当前 agent 阅读证据并撰写 → analysis.md
+    → Python --analysis → 校验与拼装 → design.md
 ```
 
-## 各步骤细节
+## 证据准备
 
-### 1. 截图采集（3 张）
-- 顶部（scrollY = 0%）
-- 中部偏上（scrollY = 35%）
-- 中下部（scrollY = 70%）
+采集对象包含 `meta`、`domSnapshot`、`engineeredCssEvidence`。DOM 提供标题、导航、CTA、landmark、正文样本及标志性模块候选；CSS 采样提供选择器、元素角色、矩形、字体、颜色、盒模型与动效声明。原始 JSON 必须完整，不要截断序列化字符串。
 
-设计原则：3 张是 Chrome `captureVisibleTab` 速率限制（每秒 ≤2 次）下的安全上限，且能覆盖 hero、内容主区、footer 上方过渡区。
+`--prepare` 将 DOM、`design_document.py` 提取的 `designTokens`/`tokenEvidence` 和 `css_evidence.py` 压缩的 CSS 摘要写入 `analysis-input.md`，附带当前语言的分析要求。截图以本地文件路径列出，不编码、不上传、不调用外部模型。
 
-**chrome-devtools MCP 实现要点：**
-- 使用 `mcp__chrome-devtools__navigate_page` 打开 URL；
-- 使用 `mcp__chrome-devtools__evaluate_script` 执行 `window.scrollTo({top: docHeight*0.35, behavior:'instant'})`；
-- 使用 `mcp__chrome-devtools__take_screenshot` 保存为 PNG/JPEG；
-- 每次截图后 sleep ~600ms 以避开速率限制。
+## 分析分支
 
-### 2. DOM + CSS 采集
-通过 `evaluate_script` 执行 `assets/collect_design_data.js`，返回单个 JSON 对象：
+视觉能力由当前宿主实际可用的图片输入/读取能力决定，Python 不探测模型。能查看截图时结合截图；不能查看、能力未知或截图失败时不传 `--screenshots`，基于 DOM/CSS 完成同样八节正文，并在 Overview 标注未检查截图。若部分截图失败，仅使用实际看过的其余图片，说明覆盖范围。
 
-```json
-{
-  "meta":   { "title", "hostname", "description", "url", ... },
-  "domSnapshot": {
-    "headings":  [{level, text}],
-    "navigation": ["...nav text..."],
-    "ctas":      [{tag, text, href, ariaLabel}],
-    "landmarks": [{tag, role, id, className, text}],
-    "bodyTextSample": "<截断到 14k 字>",
-    "counts": {forms, inputs, tables, codeBlocks, articleContainers, pricingSections}
-  },
-  "engineeredCssEvidence": {
-    "source": {url, title, hostname},
-    "totalElements": <int>,
-    "sampledElements": <int>,
-    "rows": [
-      {
-        "selectorHint", "componentType", "tagName", "role", "id", "className",
-        "textSample", "rect": {...},
-        "typography": {fontFamily, fontSize, fontWeight, lineHeight, letterSpacing},
-        "color":      {color, backgroundColor, borderColor, outlineColor},
-        "box":        {margin*, padding*, borderRadius, boxShadow},
-        "motion":     {transition*, animation*}
-      }, ...
-    ]
-  }
-}
-```
+精确规范值只引用 designTokens；CSS 汇总属于启发式证据。保留透明度、零圆角和同一元素的排版组合。CSS 动效声明不能证明运行表现，DOM 中的图片链接不能证明图像内容。推断要标注。
 
-**采样策略（与原始扩展一致）：**
-- 优先级选择器：`body`, 标题, `p`, `a`, `button`, 表单元素, 语义化 landmark, `li`, 表格, `[role=button]`, `[class*=card]`, `[class*=btn]`, `[tabindex]`
-- 命中后按 priority 排序、再按可见面积降序
-- 上限 280 个元素
-- 过滤不可见（display:none / visibility:hidden / 0 尺寸）
+## 拼装
 
-**保存到磁盘：** chrome-devtools 的 evaluate_script 返回结构化对象，将其 `JSON.stringify` 后保存为 `collected.json`。
+`--analysis <analysis.md>` 接收当前 agent 写好的正文，用原始 collected.json 重新提取 token，校验八个 H2 的顺序、唯一性、内容及禁止代码块的要求，然后写出：
 
-### 3. CSS 处理（高频 token 提取）
-由 `scripts/css_evidence.py` 完成，逻辑等价于原扩展 `lib/css-evidence.js`：
+1. 实测 token YAML frontmatter（version: alpha）及使用说明。
+2. 八节分析正文及实施检查。
+3. Token evidence 和 Evidence Appendix。
 
-| Token 类别 | 推断方法 |
-|-----------|---------|
-| `color.text.primary` / `secondary` | 全部元素 / body 类元素 `color` 的 top-1 高频值 |
-| `color.surface.base` | `backgroundColor` 的 top-1 |
-| `color.accent` | button + link 的 bg/color/border 池子 top-1 |
-| `color.border.default` | `borderColor` top-1 |
-| `mode` | 由 background 颜色亮度判定 light/dark/mixed |
-| `font.family.primary/secondary` | `fontFamily` 的 top-2，取栈中第一项 |
-| `font.size.display/body/label` | 标题最大值 / body 元素 top-1 / 最小值 |
-| `spacing.baseUnit` | 在 4/5/6/8 中选取整除命中率最高者 |
-| `spacing.scale` | margin/padding 高频 px 值 top-5 |
-| `radius.sharp/medium/pill` | 按 ≤4 / 4-16 / >16 分桶取 top-1 |
-| `shadow.level` | 按 boxShadow 出现率分级：layered / subtle elevation / rare accent / none |
-| `motion.level` | 由最大 duration 分级：subtle (<300ms) / moderate (≥300) / expressive (≥700) |
+失败时返回非零状态，不覆盖原 design.md。最终目录包含 collected.json、analysis-input.md、analysis.md、design.md，视觉模式另有 1–3 张截图。准备成功只代表证据已整理，必须完成分析与拼装才能向用户报告完成。
 
-**噪声值过滤：** `none / normal / auto / 0 / transparent / rgba(0,0,0,0)` 等被剔除。
+## 排查
 
-此压缩结果是启发式诊断，不是规范 token。最终放在 `## Evidence Appendix` 下，原有标题整体降一级，避免与八个标准章节混淆。frontmatter token 由 `design_document.py` 直接读取原始行；不使用会丢失 alpha 的颜色汇总值。
-
-### 4. AI 风格分析（多模态）
-- **输入：** system_prompt（中/英文，要求八个英文 H2 标题）+ DOM snapshot JSON + designTokens/tokenEvidence + 3 张截图（base64 data URL）+ 收尾指令。
-- **关键约束：** 精确值只引用随附实测 token，AI 负责解释用途和规则；不猜测数值，不把推断当观测事实，不把采样选择器当成公共 API。
-- **接口：** OpenAI 兼容 `/v1/chat/completions`；image 通过 `image_url.url = "data:image/...;base64,..."` 传入。
-- **模型要求：** 必须支持多模态视觉输入（如 `kimi-latest`、`gpt-4o`、`claude-3-5-sonnet-20241022`、`qwen-vl-max` 等）。
-
-### 5. 最终拼装
-顺序固定，**不可调换**：
-
-```
-build_frontmatter(hostname, measured_tokens)  (version: alpha)
-↓
-FIXED_TEXT_1   (使用边界、证据优先级)
-↓
-strip_markdown_fence(ai_analysis) + validate_design_body
-(Overview → Colors → Typography → Layout → Elevation & Depth → Shapes → Components → Do's and Don'ts)
-↓
-FIXED_TEXT_2   (实施验收、匹配条件对照)
-↓
-Token evidence + Evidence Appendix (采样来源和启发式摘要)
-
-```
-
-由 `assemble_design_md(...)` 完成，默认写入 `output/<hostname>/design.md`，
-并把传入的 3 张截图复制到同一目录（已在目录中的会跳过）。可用
-`--output-dir` / `--output` 自定义。
-
-## 失败模式与排查
-| 现象 | 排查 |
-|------|------|
-| `engineeredCssEvidence missing` | evaluate_script 未成功；检查页面是否拦截了脚本注入或返回值过大被截断 |
-| AI 输出为空 | 检查 `WEB_DESIGN_BASE_URL` 是否带 `/v1` 后缀；检查模型是否支持 vision |
-| 截图全黑 | navigate_page 后未等待页面加载，加 `wait_for` 或 sleep 1-2 秒 |
-| `Low sample size` 诊断 | 页面元素少（如登录墙、SPA 未加载完毕），可考虑滚动后重采 |
-| HTTP 413 | 截图过大，降低截图质量或减小 viewport（可在 chrome-devtools 中 `resize_page`） |
+| 现象 | 处理 |
+|---|---|
+| 页面未加载或登录墙 | 等主要内容加载或报告访问限制，再采集 |
+| CSS 缺失或样本过少 | 检查采集返回值，重新采集；仍不足则明确证据局限 |
+| 无法截图或读取图片 | 不传截图，重新准备并使用 DOM/CSS 分析 |
+| 正文校验失败 | 按错误修正八节正文，重新拼装 |

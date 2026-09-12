@@ -1,6 +1,6 @@
 name: get-web-design
-version: 1.1.0
-description: "Extract a complete DESIGN.md style guide from any live website URL. Captures screenshots, samples DOM/computed CSS via chrome-devtools, uses a multimodal LLM for visual style analysis, and merges everything into a single structured DESIGN.md."
+version: 1.2.0
+description: "Extract a complete DESIGN.md style guide from any live website URL. Uses the current agent to analyze DOM/computed CSS with optional screenshots when vision is available. No separate API key or model service required."
 author: liaocaoxuezhe
 license: MIT
 tags: [design, frontend, css, ai-agent, web-scraping]

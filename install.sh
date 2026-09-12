@@ -28,6 +28,7 @@ FILES=(
   assets/collect_design_data.js
   scripts/generate_design_md.py
   scripts/css_evidence.py
+  scripts/design_document.py
   references/setup.md
   references/workflow.md
   references/chrome_devtools_recipes.md

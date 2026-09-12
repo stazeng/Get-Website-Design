@@ -7,7 +7,7 @@ generate_design_md.py — get-web-design 主入口脚本。
   2. 读取 3 张截图（PNG/JPEG），编码成 base64 data URL
   3. 调用用户配置的多模态 LLM（OpenAI 兼容接口），结合 DOM + 截图生成风格分析
   4. 将 engineeredCssEvidence 通过 css_evidence.normalize/format 处理为 Markdown
-  5. 拼装最终 DESIGN.md：frontmatter + design_thinking + AI 风格分析 + CSS Evidence + core_principles
+  5. 拼装最终 DESIGN.md：measured token frontmatter + 使用说明 + 八节设计规范 + 验收要求 + 证据附录
 
 环境变量（用户必填）：
   WEB_DESIGN_API_KEY     - 多模态模型 API Key
@@ -43,7 +43,6 @@ import shutil
 import sys
 import urllib.error
 import urllib.request
-from datetime import date
 from pathlib import Path
 
 SKILL_ROOT = Path(__file__).resolve().parent.parent
@@ -51,6 +50,7 @@ ASSETS = SKILL_ROOT / "assets"
 
 sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 from css_evidence import format_css_evidence_markdown, normalize_css_evidence  # noqa: E402
+from design_document import build_design_frontmatter, extract_design_tokens, validate_design_body  # noqa: E402
 
 
 # ── 工具 ─────────────────────────────────────────────────────────
@@ -74,24 +74,8 @@ def strip_markdown_fence(text: str) -> str:
     return outer_fence.group(1).strip() if outer_fence else text
 
 
-def close_unbalanced_markdown_fences(text: str) -> str:
-    text = (text or "").strip()
-    if not text:
-        return ""
-    fence_count = sum(1 for line in text.splitlines() if re.match(r"^\s*```", line))
-    return f"{text}\n```" if fence_count % 2 == 1 else text
-
-
-def build_frontmatter(hostname: str) -> str:
-    name = f"{hostname or 'Unknown'} Design System"
-    return (
-        "---\n"
-        f"name: {name}\n"
-        "version: 1.0.0\n"
-        f"last_updated: {date.today().isoformat()}\n"
-        "author: get-web-design skill\n"
-        "---"
-    )
+def build_frontmatter(hostname: str, tokens=None) -> str:
+    return build_design_frontmatter(hostname, tokens)
 
 
 # ── 构建 LLM 消息 ────────────────────────────────────────────────
@@ -102,38 +86,32 @@ def build_messages(collected: dict, screenshots: list[Path], language: str) -> l
     dom_snapshot = collected.get("domSnapshot") or {}
     hostname = meta.get("hostname") or "unknown"
     title = meta.get("title") or ""
+    measured = extract_design_tokens(collected.get("engineeredCssEvidence"))
+    design_tokens = measured["tokens"]
+    token_evidence = measured["sources"]
 
     if language == "zh":
         system_prompt = read_text(ASSETS / "system_prompt_zh.txt")
         user_intro = (
             f"网站：{hostname}\n"
             f"页面标题：{title}\n\n"
-            f"下面是 DOM 文本与页面结构快照。请结合后续截图分析网站风格，重点是配色、字体、圆角、间距、阴影、质感、动效等设计细节，不要分析 CSS 原始数据。\n"
+            f"下面是 DOM 文本与页面结构快照。请结合后续截图分析网站风格，重点是配色、字体、圆角、间距、阴影、质感、动效等设计细节，只用随附 designTokens 引用精确值，不从截图估算数值。\n"
             f"其中 distinctiveCandidates 是从真实 DOM 中挑出的模块候选，仅用于帮助你确认页面上真实存在的元素，不要为不存在的元素编造描述：\n"
-            f"{json.dumps({'meta': meta, 'domSnapshot': dom_snapshot}, ensure_ascii=False, indent=2)}"
+            f"{json.dumps({'meta': meta, 'domSnapshot': dom_snapshot, 'designTokens': design_tokens, 'tokenEvidence': token_evidence}, ensure_ascii=False, indent=2)}"
         )
-        trailing = (
-            "请只输出风格分析 markdown，不要包含 frontmatter、固定文本、CSS Evidence 或下载说明。"
-            "全文不要输出任何 HTML/CSS 代码块或结构草图；“标志性元素”最多 2 个且必须有真实证据，"
-            "仅用纯文字描述视觉规则。"
-        )
+        trailing = "请按 system prompt 的八个英文 H2 标题输出中文正文。不包含 frontmatter、固定文案、CSS Evidence、代码块或下载说明。未知信息明确标注。"
     else:
         system_prompt = read_text(ASSETS / "system_prompt_en.txt")
         user_intro = (
             f"Website: {hostname}\n"
             f"Page title: {title}\n\n"
             f"Here is a DOM text and structure snapshot. Analyze the site style with the screenshots below, "
-            f"focusing on design details (color, typography, radius, spacing, shadow, texture, motion). Do not analyze raw CSS.\n"
+            f"focusing on design details (color, typography, radius, spacing, shadow, texture, motion). Use the supplied designTokens for exact values; never estimate measurements from screenshots.\n"
             f"The distinctiveCandidates field contains real DOM-derived module candidates. Use it only to confirm "
             f"which elements actually exist on the page; never invent elements that are not there:\n"
-            f"{json.dumps({'meta': meta, 'domSnapshot': dom_snapshot}, ensure_ascii=False, indent=2)}"
+            f"{json.dumps({'meta': meta, 'domSnapshot': dom_snapshot, 'designTokens': design_tokens, 'tokenEvidence': token_evidence}, ensure_ascii=False, indent=2)}"
         )
-        trailing = (
-            "Output only the style analysis markdown. Do not include frontmatter, "
-            "fixed copy, CSS Evidence, or download instructions. Never output "
-            "HTML/CSS code blocks or structure sketches. Include at most 2 "
-            'evidence-grounded "Signature Elements", described in prose only.'
-        )
+        trailing = "Output the eight English H2 sections from the system prompt. No frontmatter, fixed copy, CSS Evidence, code fences or download instructions. Mark unknowns explicitly."
 
     user_content: list = [{"type": "text", "text": user_intro}]
     for shot in screenshots:
@@ -195,15 +173,20 @@ def call_llm(messages: list, *, api_key: str, base_url: str, model: str, timeout
 
 
 def assemble_design_md(
-    *, hostname: str, ai_analysis: str, css_evidence_md: str
+    *, hostname: str, ai_analysis: str, css_evidence_md: str, design_tokens=None, token_evidence=None
 ) -> str:
-    safe_ai_analysis = close_unbalanced_markdown_fences(strip_markdown_fence(ai_analysis))
+    safe_ai_analysis = strip_markdown_fence(ai_analysis)
+    validate_design_body(safe_ai_analysis)
+    provenance = "\n".join("- " + name + ": " + json.dumps(source, ensure_ascii=False)
+                           for name, source in (token_evidence or {}).items())
+    appendix = re.sub(r"^(#{2,5}) ", r"#\1 ", (css_evidence_md or "").strip(), flags=re.M)
     parts = [
-        build_frontmatter(hostname),
+        build_frontmatter(hostname, design_tokens),
         read_text(ASSETS / "design_thinking.md"),
         safe_ai_analysis,
-        (css_evidence_md or "").strip(),
         read_text(ASSETS / "core_principles.md"),
+        "### Token evidence\n" + provenance if provenance else "",
+        "## Evidence Appendix\n\nSampling summary only. Heuristic roles and flattened color summaries below are not normative tokens; retain the exact values and alpha in the frontmatter. This snapshot does not establish unobserved states, themes or viewport behavior.\n\n" + appendix if appendix else "",
     ]
     return "\n\n".join(p for p in parts if p)
 
@@ -295,6 +278,8 @@ def main() -> int:
         hostname=hostname,
         ai_analysis=ai_analysis,
         css_evidence_md=css_md,
+        design_tokens=extract_design_tokens(raw_evidence)["tokens"],
+        token_evidence=extract_design_tokens(raw_evidence)["sources"],
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(final_md, encoding="utf-8")

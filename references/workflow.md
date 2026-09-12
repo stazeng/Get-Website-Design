@@ -21,11 +21,11 @@ evaluate_script(collect_design_data.js) ──► collected.json
                              generate_design_md.py
                               ├─ normalize_css_evidence(...)
                               ├─ format_css_evidence_markdown(...)
-                              ├─ build_messages(dom + 3 screenshots)
+                              ├─ build_messages(dom + measured tokens + 3 screenshots)
                               ├─ call_llm(vision model)
                               └─ assemble: frontmatter + FIXED_1
-                                          + AI 分析 + CSS Evidence
-                                          + FIXED_2
+                                          + 八节正文 + FIXED_2
+                                          + Token evidence + Evidence Appendix
                                     │
                                     ▼
                 output/<hostname>/design.md
@@ -107,11 +107,11 @@ evaluate_script(collect_design_data.js) ──► collected.json
 
 **噪声值过滤：** `none / normal / auto / 0 / transparent / rgba(0,0,0,0)` 等被剔除。
 
-输出 Markdown 段落标题为 `## Engineering CSS Evidence`（中文 `## 工程 CSS 证据`），最终拼入 DESIGN.md 第 4 段。
+此压缩结果是启发式诊断，不是规范 token。最终放在 `## Evidence Appendix` 下，原有标题整体降一级，避免与八个标准章节混淆。frontmatter token 由 `design_document.py` 直接读取原始行；不使用会丢失 alpha 的颜色汇总值。
 
 ### 4. AI 风格分析（多模态）
-- **输入：** system_prompt（中/英文，要求按固定 H1/H2/H3 输出风格分析）+ DOM snapshot JSON + 3 张截图（base64 data URL）+ 收尾指令。
-- **关键约束：** 提示词明确要求 *"不要分析 CSS 原始数据"* —— CSS 证据由脚本生成，模型只看截图和 DOM 文本。
+- **输入：** system_prompt（中/英文，要求八个英文 H2 标题）+ DOM snapshot JSON + designTokens/tokenEvidence + 3 张截图（base64 data URL）+ 收尾指令。
+- **关键约束：** 精确值只引用随附实测 token，AI 负责解释用途和规则；不猜测数值，不把推断当观测事实，不把采样选择器当成公共 API。
 - **接口：** OpenAI 兼容 `/v1/chat/completions`；image 通过 `image_url.url = "data:image/...;base64,..."` 传入。
 - **模型要求：** 必须支持多模态视觉输入（如 `kimi-latest`、`gpt-4o`、`claude-3-5-sonnet-20241022`、`qwen-vl-max` 等）。
 
@@ -119,15 +119,17 @@ evaluate_script(collect_design_data.js) ──► collected.json
 顺序固定，**不可调换**：
 
 ```
-build_frontmatter(hostname)
+build_frontmatter(hostname, measured_tokens)  (version: alpha)
 ↓
-FIXED_TEXT_1   (Design Thinking 准则)
+FIXED_TEXT_1   (使用边界、证据优先级)
 ↓
-strip_markdown_fence(ai_analysis)   (AI 风格分析，去掉首尾 ``` 围栏)
+strip_markdown_fence(ai_analysis) + validate_design_body
+(Overview → Colors → Typography → Layout → Elevation & Depth → Shapes → Components → Do's and Don'ts)
 ↓
-formatted CSS Evidence Markdown
+FIXED_TEXT_2   (实施验收、匹配条件对照)
 ↓
-FIXED_TEXT_2   (Negative Constraints + Performance)
+Token evidence + Evidence Appendix (采样来源和启发式摘要)
+
 ```
 
 由 `assemble_design_md(...)` 完成，默认写入 `output/<hostname>/design.md`，

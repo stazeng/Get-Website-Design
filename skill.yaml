@@ -1,5 +1,5 @@
 name: get-web-design
-version: 1.0.0
+version: 1.1.0
 description: "Extract a complete DESIGN.md style guide from any live website URL. Captures screenshots, samples DOM/computed CSS via chrome-devtools, uses a multimodal LLM for visual style analysis, and merges everything into a single structured DESIGN.md."
 author: liaocaoxuezhe
 license: MIT
@@ -20,4 +20,5 @@ context_files:
 scripts:
   - scripts/generate_design_md.py
   - scripts/css_evidence.py
+  - scripts/design_document.py
   - assets/collect_design_data.js

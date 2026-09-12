@@ -9,7 +9,7 @@
 - 使用多模态 LLM 分析站点的视觉风格、组件规范与整体氛围
 - 识别网页中真正有记忆点的标志性元素，并用纯文字输出视觉规则（不含代码）
 - 通过 chrome-devtools MCP 采集 DOM、Computed CSS 与 3 视口截图
-- 输出包含 frontmatter + design thinking + AI 风格分析 + CSS 证据 + negative constraints 的完整文档
+- 输出符合 Google DESIGN.md alpha 格式的实测 token 和八节正文，结合 Vercel 的任务导向、组件复用与验收方法
 
 ## 触发场景
 
@@ -63,7 +63,7 @@ curl -fsSL https://raw.githubusercontent.com/liaocaoxuezhe/get-web-design/main/i
 
 ### 手动安装
 
-将 `SKILL.md` 复制到你的项目根目录或 agent context 目录即可。
+复制完整仓库中的 `SKILL.md`、`skill.yaml`、`assets/`、`scripts/`、`references/` 到目标 skill 目录；仅复制 `SKILL.md` 无法运行生成脚本。
 
 ## 工作流
 
@@ -89,7 +89,8 @@ URL → [chrome-devtools] 3 截图 + collected.json
 | `assets/system_prompt_en.txt` / `system_prompt_zh.txt` | 多模态 LLM system prompt |
 | `assets/design_thinking.md` / `core_principles.md` | DESIGN.md 固定头尾段落 |
 | `scripts/generate_design_md.py` | 主入口 CLI：调 LLM 与最终拼装 |
-| `scripts/css_evidence.py` | CSS computed-style → 设计 token 压缩 |
+| `scripts/css_evidence.py` | CSS computed-style → 证据摘要 |
+| `scripts/design_document.py` | 规范 token 提取、YAML 序列化与八节正文验证 |
 | `references/setup.md` | chrome-devtools MCP + LLM 凭据配置 |
 | `references/workflow.md` | 完整数据流详解 |
 | `references/chrome_devtools_recipes.md` | MCP 精确调用顺序与故障兜底 |
@@ -97,3 +98,14 @@ URL → [chrome-devtools] 3 截图 + collected.json
 ## License
 
 MIT
+
+## 1.1.0：DESIGN.md 格式与复用规则
+
+- 精确数值由程序从 CSS 样本提取，AI 解释用途；保留透明度和同一元素的排版组合，不补造未知值。
+- 正文依次为 Overview、Colors、Typography、Layout、Elevation & Depth、Shapes、Components、Do's and Don'ts。中文模式保留英文标题。
+- 移除覆盖原站风格的字体/渐变禁令，补充适用范围、读者任务、证据边界和可观察验收。
+- Python 3.9 可运行，无新增 Python 依赖；安装脚本包含新的 `scripts/design_document.py`。
+
+格式检查：`npx @google/design.md lint output/<hostname>/design.md`。格式通过不代表已完成 Stitch 实际导入或页面视觉验证。
+
+参考：[Google 格式规范](https://github.com/google-labs-code/design.md/blob/main/docs/spec.md)、[Vercel 的使用方法](https://vercel.com/blog/how-our-agents-build-on-brand-pages-with-design-md)。
